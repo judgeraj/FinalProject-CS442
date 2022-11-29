@@ -3,7 +3,8 @@ class NodeLight {
         this.r = r;
         this.g = g;
         this.b = b;
-        this.point = point ?? false;
+        this.directional = point ? 1:0;
+        this.is_the_sun = point;
     }
 }
 

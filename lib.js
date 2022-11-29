@@ -24,8 +24,6 @@ function create_and_load_vertex_buffer(gl, data, usage) {
     return buf_id;
 }
 
-
-
 /**
  * 
  * @param {WebGLRenderingContext} gl

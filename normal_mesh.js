@@ -314,9 +314,6 @@ class NormalMesh {
         let lines = text.split( /\r?\n/ );
 
         let verts = [];
-        let uv = [];
-        let rgb = [];
-        let vn = [];
         let index = [];
 
         for( let line of lines ) {
@@ -333,32 +330,16 @@ class NormalMesh {
                 verts.push( parseFloat( parts[2] ) );
                 verts.push( parseFloat( parts[4] ) );
                 verts.push( parseFloat( parts[6] ) );
-
                 // color data
-                rgb.push( 1, 1, 1, 1 );
-            }
-            else if ( parts[0] === 'vt' ) {
-                console.log(parts);
-                uv.push(parseFloat(parts[2]));
-                uv.push(parseFloat(parts[4]));
-            } else if ( parts[0] === 'vn' ) {
-                // console.log(parts)
-                vn.push(parseFloat(parts[2]), parseFloat(parts[4]), parseFloat(parts[6]));
+                verts.push( 1, 1, 1, 1 );
             } else if ( parts[0] === 'f' ) {
-                parts.forEach( element => {
-                    if ( element !== 'f' && element !== ' ' ) {
-                        let indices = element.split('/');
-                        index.push(parseFloat(indices[0]));//, parseFloat(indices[1]), parseFloat(indices[2])
-                        console.log(index.length)
-
-                    }
-                });
+                index.push(parseFloat(parts[2],parts[4],parts[6]));//, parseFloat(indices[1]), parseFloat(indices[2])
             }
         }
         //console.log( verts.slice(540, 600) )
         // console.log( indis.slice(540, 600) )
-        console.log(index.length)
-        return new NormalMesh( gl, program, verts, index, material, false, rgb, uv, vn );
+        // console.log(index.length)
+        return new NormalMesh( gl, program, verts, index, material, false );
     }
 
     /**
@@ -370,7 +351,7 @@ class NormalMesh {
      */
     static from_obj_file( gl, file_name, program, f, material ) {
         let request = new XMLHttpRequest();
-        console.log(f)
+        // console.log(f)
 
         // the function that will be called when the file is being loaded
         request.onreadystatechange = function() {
@@ -385,11 +366,96 @@ class NormalMesh {
             let loaded_mesh = NormalMesh.from_obj_text( gl, program, request.responseText, material);
 
             console.log( 'loaded ', file_name );
-            console.log(f)
+            // console.log(f)
             f( loaded_mesh );
         };
 
         request.open( 'GET', file_name ); // initialize request.
         request.send();                   // execute request
     }
+
+    static diamond_square( scale, roughness, min_height, max_height, center_row, center_col ) {
+        console.log(center_row,center_col)
+        //check for map length if too big it will take too much memory
+        //only allowing for arr.length = 2^14 + 1 max size
+        scale = (scale > 14) ? 14 : scale;
+
+        //offset for midpoint
+        let random_offset = Math.random() * (max_height - min_height) + min_height;
+        let length = Math.pow(2, scale) + 1;
+
+        //generating empty map of size length
+        let map = [];
+        for ( let i =0; i < length; i++ ) {
+            map[i] = new Array(length).fill(0);
+        }
+
+        //initializing corners of the map to random value between passed max and min heights
+        map[0][0] = Math.random() * (max_height - min_height) + min_height;
+        map[length - 1][0] = Math.random() * (max_height - min_height) + min_height;
+        map[0][length - 1] = Math.random() * (max_height - min_height) + min_height;
+        map[length - 1][length - 1] = Math.random() * (max_height - min_height) + min_height;
+        console.log(map)
+
+        let partition_size = length - 1;
+
+        //
+        // //setting the midpoint to the 4 corners and offset (rip) added
+        // map[(length - 1)/2][(length - 1)/2] = ( map[0][0] + map[length - 1][0] + map[0][length - 1] +
+        //                                         map[length - 1][length - 1] ) / 4 + random_offset;
+        //
+        //
+
+        while (partition_size > 1) {
+            let middle = partition_size / 2;
+
+            //diamond step
+            for ( let row = 0; row < length - 1; row += middle ) {
+                for ( let col = 0; col < length - 1; col += partition_size ) {
+                    diamond(row + middle, col, partition_size, random_offset * roughness);
+                }
+            }
+
+            //square step
+            for (let row = middle; row < length - 1; row += partition_size) {
+                for (let col = middle; col < length - 1; col += partition_size) {
+                    square(row, col, partition_size, random_offset * roughness)
+                }
+            }
+            // /square(partition_size, length, middle, random_offset);
+            roughness = roughness/2
+            partition_size = parseInt(partition_size/2);
+        }
+
+        return map;
+
+        function square(row, col, part_size, random_offset, map) {
+            let average_corners =
+                map[row - part_size/2][col - part_size/2] +
+                map[row + part_size/2][col - part_size/2] +
+                map[row - part_size/2][col + part_size/2] +
+                map[row + part_size/2][col + part_size/2];
+            // console.log(average_corners);
+
+            map[row][col] = (average_corners/4) * random_offset;
+        }
+
+        function diamond(row, col, part_size, random_offset) {
+
+            console.log(map[Math.abs(row - part_size/2)][col])
+            let average_corners =
+                map[row - part_size/2][col] +
+                map[row + part_size/2][col] +
+                map[row][col - part_size/2] +
+                map[row][col + part_size/2];
+            // console.log(average_corners);
+
+            map[row][col] = (average_corners/4) * random_offset;
+        }
+
+
+
+    }
+
 }
+

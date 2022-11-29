@@ -204,9 +204,7 @@
             let jobs = [];
             let lights = [];
             let keys = Keys.start_listening();
-            let cam = new Camera();
-            cam.translate( 0, 1, -4.5 );
-
+            let map_size = 2;
             
             // let metal =
             //     new LitMaterial( gl, './textures/metal.png', gl.LINEAR, 0.25, 1, 2, 5 );
@@ -216,78 +214,90 @@
             let scale = 
                 new LitMaterial( gl, './textures/metal_scale.png', gl.LINEAR, 0.25, 1, 2, 4 );
 
-            // let sun_dir = ( new Vec4( 1.0, 0.0, 0.0, 0.0 ) ).norm();
-            // let sun = new Light( sun_dir.x, sun_dir.y, sun_dir.z, 1.0, 0.95, 0.85, 0 );
-            // let light1 = new Light( -9, -9, 0.0, 1.0, 0.2, 0.2, 1 );
             let scene = new Scene();
-            let camera_node = new Node(0, 0, 0, 0, 0, 0, 0, 0, 0, cam);
-            scene.set_camera_node(camera_node);
-            scene.set_sun_direction(1,1,1);
-            scene.set_sun_color(0.25,0.25,0.25);
+            scene.set_sun_color(1,1,1);
+            scene.set_sun_direction(0,3,0);
             scene.bind_sun(gl, lit_program);
-            scene.generate_render_batch(jobs,lights)
-            // let mesh =
-            //     // NormalMesh.uv_sphere( gl, lit_program, 1, 16, scale );
-            //     // NormalMesh.box( gl, lit_program, 1, 1, 1, metal );
-            //     new RenderMesh(new Mat4(), NormalMesh.platform(gl, lit_program, 20, 20, -1, 1, scale));
+            let map = [
+                [0,0,0,0,0,0,0,0,0,2,2,2],
+                [0,1,1,0,0,1,1,0,0,1,1,0],
+                [0,1,1,0,0,1,1,0,0,1,1,0],
+                [0,0,0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0,0,0]];
+
+            let auto_map = NormalMesh.diamond_square(map_size, 1, -1, 1, parseInt((Math.pow(2, map_size) + 1)/2),
+                                                                       parseInt((Math.pow(2, map_size) + 1)/2));
+            let platform = NormalMesh.platform(gl, lit_program, 2, 20, 0, 1, scale);
+            let cube = NormalMesh.box(gl, lit_program, 1, 1, 1 , scale);
+            let uv_sphere = NormalMesh.uv_sphere(gl, lit_program, 1,16,scale);
+            let platform_node = scene.create_node(0, -2, 0, 0, 0, 0, 1, 1, 1, platform);
+            let platform_pointlight = new NodeLight(0.0, 0.0, 1.0, false);
+            let height_map = NormalMesh.from_heightmap(gl, lit_program, map, -1, 1, scale);
+
+            scene.create_node(-5,-5,-2,0,0,0,6,6,6,height_map);
+            platform_node.create_child_node(-2, -2, 0, 0, 0, 0, 1, 1, 1, cube);
+            platform_node.create_child_node(2, 2, 0, 0, 0, 0, 1, 1, 1, cube);
+            platform_node.create_child_node(0, 5, 0, 0, 0, 0, 1, 1, 1, platform_pointlight);
+            platform_node.create_child_node(0, 2, -4, 0, 0, 0, 1, 1, 1, uv_sphere);
+            scene.generate_render_batch(jobs,lights);
+            console.log(jobs)
+            console.log(lights);
 
             let projection = Mat4.perspective_fovx( 0.125, 4 / 3, 0.125, 1024 );
             let current_program = lit_program;
-        // NormalMesh.from_obj_file(gl, './cube.obj', lit_program, load_mesh, scale);
-            console.log(testing_mesh)
+
             function render( now ) {
                 last_update = now;
 
                 requestAnimationFrame( render );
-                
+
                 gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
 
-                // we're using world-space lighting, so it's okay to combine projection 
-                // and model-view like this.
-                let model = Mat4.translation( 0, 0, 0 );
-                // model = model.mul( projection );
-                let view = cam.get_view_matrix();
-                // model = model.mul( cam.get_view_matrix() );
-                let modelview = view.mul( model );
-                
-                set_uniform_matrix4( gl, current_program, 'projection', projection.data );
-                set_uniform_matrix4( gl, current_program, 'modelview', modelview.data );
-                set_uniform_matrix4( gl, current_program, 'model', model.data );
-                set_uniform_matrix4( gl, current_program, 'view', view.data );
+                lights.forEach( element => {
+                    if (element.color.directional !== 1) {
+                        let light = new Light(element.loc.x, element.loc.y, element.loc.z,
+                            element.color.r, element.color.g,element.color.b, 1);
+                        light.bind(gl, current_program, element.loc);
+                    }
+                });
 
-                // transform viewer coordinates
-                // let viewer_loc = cam.get_transformed_coordinates();
-                set_uniform_vec3( gl, current_program, 'viewer_loc', cam.x, cam.y, cam.z );
+                jobs.forEach( element => {
+                    let model = element.matrix;
+                    let view = scene.get_camera_view();
 
-                // bind lights
-                // sun.bind( gl, current_program, modelview );
-                // light1.bind( gl, current_program, modelview );
-                for (let light in lights) {
-                    light.bind(gl, current_program, modelview);
-                }
-                for (let mesh in jobs) {
-                    mesh.render(gl);
-                }
+                    let modelview = view.mul( model );
+
+                    set_uniform_matrix4( gl, current_program, 'projection', projection.data );
+                    set_uniform_matrix4( gl, current_program, 'modelview', modelview.data );
+                    set_uniform_matrix4( gl, current_program, 'model', model.data );
+                    set_uniform_matrix4( gl, current_program, 'view', view.data );
+                    let cam = scene.camera_node;
+                    set_uniform_vec3( gl, current_program, 'viewer_loc', cam.x, cam.y, cam.z );
+
+                    element.mesh.render(gl)
+                });
+
             }
 
             const KEYMAP = {
-                'KeyW': function() { cam.move_in_direction( 0, 0, FLY_SPEED_PER_FRAME ); },
-                'KeyS': function() { cam.move_in_direction( 0, 0, -FLY_SPEED_PER_FRAME ); },
-                'KeyA': function() { cam.move_in_direction( -FLY_SPEED_PER_FRAME, 0, 0 ); },
-                'KeyD': function() { cam.move_in_direction( FLY_SPEED_PER_FRAME, 0, 0 ); },
-                'Space': function() { cam.translate( 0, FLY_SPEED_PER_FRAME, 0 ); },
-                'KeyC': function() { cam.translate( 0, -FLY_SPEED_PER_FRAME, 0 ); },
-                'KeyQ': function() { cam.add_roll( -ROTATION_SPEED_PER_FRAME ); },
-                'KeyE': function() { cam.add_roll( ROTATION_SPEED_PER_FRAME ); },
-                'ArrowLeft': function() { cam.add_yaw( -ROTATION_SPEED_PER_FRAME ); },
-                'ArrowRight': function() { cam.add_yaw( ROTATION_SPEED_PER_FRAME ); },
-                'ArrowUp': function() { cam.add_pitch( -ROTATION_SPEED_PER_FRAME ); },
-                'ArrowDown': function() { cam.add_pitch( ROTATION_SPEED_PER_FRAME ); },
+                'KeyW': function() { scene.camera_node.move_in_direction( 0, 0, FLY_SPEED_PER_FRAME ); },
+                'KeyS': function() { scene.camera_node.move_in_direction( 0, 0, -FLY_SPEED_PER_FRAME ); },
+                'KeyA': function() { scene.camera_node.move_in_direction( -FLY_SPEED_PER_FRAME, 0, 0 ); },
+                'KeyD': function() { scene.camera_node.move_in_direction( FLY_SPEED_PER_FRAME, 0, 0 ); },
+                'Space': function() { scene.camera_node.translate( 0, FLY_SPEED_PER_FRAME, 0 ); },
+                'KeyC': function() { scene.camera_node.translate( 0, -FLY_SPEED_PER_FRAME, 0 ); },
+                'KeyQ': function() { scene.camera_node.add_roll( -ROTATION_SPEED_PER_FRAME ); },
+                'KeyE': function() { scene.camera_node.add_roll( ROTATION_SPEED_PER_FRAME ); },
+                'ArrowLeft': function() { scene.camera_node.add_yaw( -ROTATION_SPEED_PER_FRAME ); },
+                'ArrowRight': function() { scene.camera_node.add_yaw( ROTATION_SPEED_PER_FRAME ); },
+                'ArrowUp': function() { scene.camera_node.add_pitch( -ROTATION_SPEED_PER_FRAME ); },
+                'ArrowDown': function() { scene.camera_node.add_pitch( ROTATION_SPEED_PER_FRAME ); },
             };
 
             function update() {
                 let keys_down = keys.keys_down_list();
-
+                // console.log(keys_down);
                 for( const key of keys_down ) {
                    let bound_function = KEYMAP[ key ];
 
