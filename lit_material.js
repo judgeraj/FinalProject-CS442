@@ -33,6 +33,7 @@ class LitMaterial {
         }
 
         let image = new Image();
+        image.crossOrigin = "";
         let _tex = this; // inside an anomymous function, 'this' refers to the function.
                          // so we create an alias to the material we're creating.
 

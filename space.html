@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            div {
+                display: flex;
+                justify-content: flex-end;
+
+            }
+            body {
+
+            }
+            canvas {
+                /*width: 1200px;*/
+                /*height: 950px;*/
+                margin-left: auto;
+                display: inline;
+                text-align: center;
+
+            }
+
+            #the-canvas { border: 1px solid darkblue; }
+            #user-matrix input { width: 64px; font-size: 24px; }
+        </style>
+
+    </head>
+
+    <body>
+    <div>
+    <canvas id = "the-canvas" width = "1200" height = "800"></canvas>
+        <script src = "lib.js"></script>
+        <script src = "vector.js"></script>
+        <script src = "matrix.js"></script>
+        <script src = "normal_mesh.js"></script>
+        <script src = "controls.js"></script>
+        <script src = "cam.js"></script>
+        <script src = "lit_material.js"></script>
+        <!-- <script src = "programs.js"></script> -->
+        <script src = "light.js"></script>
+        <script src = "scene.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.js" type="text/javascript"></script>
+        <script>
+            client = new Paho.MQTT.Client("127.0.01", Number(1235), "");
+            client.onMessageArrived = onMessageArrived;
+            client.onConnectionLost = onConnectionLost;
+            client.connect({onSuccess:onConnect});
+            function onConnect() {
+                // Once a connection has been made, make a subscription and send a message.
+                console.log("onConnect");
+
+                console.log(client);
+
+                client.subscribe("js_accel_x");
+                client.subscribe("js_accel_y");
+                client.subscribe("js_accel_z");
+                message = new Paho.MQTT.Message("Hello");
+                message.topic = "accel";
+                message.destinationName = "accel"
+                client.send(message);
+
+
+
+
+            }
+
+            function onConnectionLost(responseObject) {
+                if (responseObject.errorCode !== 0) {
+                    console.log("onConnectionLost:"+responseObject.errorMessage);
+                }
+            }
+
+
+            var accel_x = 0;
+            var accel_y = 0;
+            var accel_z = 0;
+
+            var vel_x = 0;
+            var vel_y = 0;
+            var vel_z = 0;
+            // called when a message arrives
+            function onMessageArrived(message) {
+                let topic_name = message.destinationName;
+                if(topic_name == "js_accel_x"){
+                    accel_x = parseFloat(message.payloadString);
+                }
+                else if(topic_name == "js_accel_y"){
+                    accel_y = parseFloat(message.payloadString);
+                }
+                else if(topic_name == "js_accel_z"){
+                    accel_z = parseFloat(message.payloadString);
+                }
+
+                //console.log("onMessageArrived:"+message.payloadString);
+            }
+
+            console.log(client);
+
+
+        </script>
+
+        <script>
+            let canvas = document.getElementById( 'the-canvas' );
+            /** @type {WebGLRenderingContext} */
+            let gl = canvas.getContext( 'webgl2' );
+            let helicopter = new Audio('./audio/helicopter.mp3');
+            let camera_node = undefined;
+            const GOURAUD_VERTEX_SHADER2 =
+                `   #version 300 es
+                precision mediump float;
+
+                uniform mat4 projection;
+                uniform mat4 modelview;
+                uniform mat4 model;
+                uniform mat4 view;
+                uniform vec3 viewer_loc;
+
+                uniform vec3 sun_dir;
+                uniform vec3 sun_color;
+
+                uniform vec3 light1_loc;
+                uniform vec3 light1_color;
+
+                uniform vec3 light2_loc;
+                uniform vec3 light2_color;
+
+                uniform vec3 light3_loc;
+                uniform vec3 light3_color;
+
+                uniform vec3 light4_loc;
+                uniform vec3 light4_color;
+
+                uniform vec3 light5_loc;
+                uniform vec3 light5_color;
+
+                uniform vec3 light6_loc;
+                uniform vec3 light6_color;
+
+                const float light_attenuation_k = 0.01;
+                const float light_attenuation_l = 0.1;
+                const float light_attenuation_q = 0.00; /* no quadratic term for now */
+
+                uniform float mat_ambient;
+                uniform float mat_diffuse;
+                uniform float mat_specular;
+                uniform float mat_shininess;
+
+                in vec3 coordinates;
+                in vec4 color;
+                in vec2 uv;
+                in vec3 surf_normal;
+
+                out vec4 v_color;
+                out vec2 v_uv;
+
+                vec3 diff_color(
+                    vec3 normal,
+                    vec3 light_dir,
+                    vec3 light_color,
+                    float mat_diffuse
+                ) {
+                    return mat_diffuse * light_color * max( dot( normal, light_dir ), 0.0 );
+                }
+
+                vec3 spec_color(
+                    vec3 normal,
+                    vec3 light_dir,
+                    vec3 eye_dir,
+                    vec3 light_color,
+                    float mat_specular,
+                    float mat_shiniess
+                ) {
+                    float cos_light_surf_normal = dot( normal, light_dir );
+
+                    if( cos_light_surf_normal <= 0.0 ) {
+                        return vec3( 0.0, 0.0, 0.0 );
+                    }
+
+                    vec3 light_reflection =
+                        2.0 * cos_light_surf_normal * normal - light_dir;
+
+                    return
+                        pow(
+                            max( dot( light_reflection, normalize( eye_dir ) ), 0.0  ),
+                            mat_shininess
+                        ) * light_color * mat_specular;
+                }
+
+                float attenuation( vec3 vector_to_light ) {
+                    float light1_dist = length( vector_to_light ) / 2.0;
+                    float light1_atten = 1.0 / (
+                        light_attenuation_k +
+                        light_attenuation_l * light1_dist +
+                        light_attenuation_q * light1_dist * light1_dist
+                    );
+
+                    return (light1_atten / 1.0);
+                }
+
+                void main( void ) {
+                    vec3 normal_tx = normalize( mat3( model ) * surf_normal );
+                    vec3 coords_tx = ( model * vec4( coordinates, 1.0 ) ).xyz;
+
+                    gl_Position = projection * modelview * vec4( coordinates, 1.0 );
+                    vec3 eye_dir = normalize( viewer_loc - coords_tx );
+
+                    vec4 ambient_color = vec4( mat_ambient, mat_ambient, mat_ambient, 1.0 );
+
+                    // vec3 sun_dir_tx =
+                    float cos_sun_dir_surf_normal = dot( sun_dir, normal_tx );
+                    vec3 sun_diffuse_color = diff_color( normal_tx, sun_dir, sun_color, mat_diffuse );
+
+                    vec3 sun_spec_color =
+                        spec_color( normal_tx, sun_dir, eye_dir, sun_color, mat_specular, mat_shininess );
+
+                    vec4 color_from_sun = vec4( sun_diffuse_color + sun_spec_color, 1.0 );
+
+                    vec3 vector_to_light1 = light1_loc - coords_tx;
+                    vec3 light1_dir = normalize( vector_to_light1 );
+                    float light1_atten = attenuation( vector_to_light1 );
+
+                    vec3 light1_diffuse_color = diff_color(
+                        normal_tx, light1_dir, light1_color, mat_diffuse);
+                    vec3 light1_spec_color = spec_color(
+                        normal_tx, light1_dir, eye_dir, light1_color, mat_specular, mat_shininess );
+                    vec4 color_from_light1 = vec4(
+                            ( light1_diffuse_color + light1_spec_color ) * light1_atten, 1.0 );
+
+                    vec3 vector_to_light2 = light2_loc - coords_tx;
+                    vec3 light2_dir = normalize( vector_to_light2 );
+                    float light2_atten = attenuation( vector_to_light2 );
+
+                    vec3 light2_diffuse_color = diff_color(
+                        normal_tx, light2_dir, light2_color, mat_diffuse);
+                    vec3 light2_spec_color = spec_color(
+                        normal_tx, light2_dir, eye_dir, light2_color, mat_specular, mat_shininess );
+                    vec4 color_from_light2 = vec4(
+                            ( light2_diffuse_color + light2_spec_color ) * light2_atten, 1.0 );
+
+                    vec3 vector_to_light3 = light3_loc - coords_tx;
+                    vec3 light3_dir = normalize( vector_to_light3 );
+                    float light3_atten = attenuation( vector_to_light3 );
+
+                    vec3 light3_diffuse_color = diff_color(
+                        normal_tx, light3_dir, light3_color, mat_diffuse);
+                    vec3 light3_spec_color = spec_color(
+                        normal_tx, light3_dir, eye_dir, light3_color, mat_specular, mat_shininess );
+                    vec4 color_from_light3 = vec4(
+                            ( light3_diffuse_color + light3_spec_color ) * light3_atten, 1.0 );
+
+                    vec3 vector_to_light4 = light4_loc - coords_tx;
+                    vec3 light4_dir = normalize( vector_to_light4 );
+                    float light4_atten = attenuation( vector_to_light4 );
+
+                    vec3 light4_diffuse_color = diff_color(
+                        normal_tx, light4_dir, light4_color, mat_diffuse);
+                    vec3 light4_spec_color = spec_color(
+                        normal_tx, light4_dir, eye_dir, light4_color, mat_specular, mat_shininess );
+                    vec4 color_from_light4 = vec4(
+                            ( light4_diffuse_color + light4_spec_color ) * light4_atten, 1.0 );
+
+                    vec3 vector_to_light5 = light5_loc - coords_tx;
+                    vec3 light5_dir = normalize( vector_to_light5 );
+                    float light5_atten = attenuation( vector_to_light5 );
+
+                    vec3 light5_diffuse_color = diff_color(
+                        normal_tx, light5_dir, light5_color, mat_diffuse);
+                    vec3 light5_spec_color = spec_color(
+                        normal_tx, light5_dir, eye_dir, light5_color, mat_specular, mat_shininess );
+                    vec4 color_from_light5 = vec4(
+                            ( light5_diffuse_color + light5_spec_color ) * light5_atten, 1.0 );
+
+                    vec3 vector_to_light6 = light6_loc - coords_tx;
+                    vec3 light6_dir = normalize( vector_to_light6 );
+                    float light6_atten = attenuation( vector_to_light6 );
+
+                    vec3 light6_diffuse_color = diff_color(
+                        normal_tx, light6_dir, light6_color, mat_diffuse);
+                    vec3 light6_spec_color = spec_color(
+                        normal_tx, light6_dir, eye_dir, light6_color, mat_specular, mat_shininess );
+                    vec4 color_from_light6 = vec4(
+                            ( light6_diffuse_color + light6_spec_color ) * light6_atten, 1.0 );
+                    /* multiply color by 0 to remove it. try changing the 0 to a small number like .2
+                    and the 1 to the complement of that number (1 - .2 = .8) to see how color blending works.*/
+                    v_color =
+                        ( 0.0 * color ) +
+                        ( 1.0 * (
+                            ambient_color +
+                            color_from_sun +
+                            color_from_light1 +
+                            color_from_light2 +
+                            color_from_light3 +
+                            color_from_light4 +
+                            color_from_light5 +
+                            color_from_light6
+                        ) );
+                    v_uv = uv;
+                }
+            `;
+
+            const GOURAUD_FRAGMENT_SHADER2 =
+                `   #version 300 es
+                precision mediump float;
+
+                in vec4 v_color;
+                in vec2 v_uv;
+
+                out vec4 f_color;
+
+                uniform sampler2D tex_0;
+
+                void main( void ) {
+                    f_color = v_color * texture( tex_0, v_uv );
+
+                    /* we can test depth values with this.
+                    f_color = vec4(vec3(gl_FragCoord.z), 1.0); */
+                }
+            `;
+
+            const GOURAUD_VERTEX_SHADER =
+            `   #version 300 es
+                precision mediump float;
+
+                uniform mat4 projection;
+                uniform mat4 modelview;
+                uniform mat4 model;
+                uniform mat4 view;
+                uniform vec3 viewer_loc;
+
+                uniform vec3 sun_dir;
+                uniform vec3 sun_color;
+
+                const float light_attenuation_k = 0.01;
+                const float light_attenuation_l = 0.1;
+                const float light_attenuation_q = 0.00; /* no quadratic term for now */
+
+                uniform float mat_ambient;
+                uniform float mat_diffuse;
+                uniform float mat_specular;
+                uniform float mat_shininess;
+
+                in vec3 coordinates;
+                in vec4 color;
+                in vec2 uv;
+                in vec3 surf_normal;
+
+                out vec4 v_color;
+                out vec2 v_uv;
+
+                vec3 diff_color(
+                    vec3 normal,
+                    vec3 light_dir,
+                    vec3 light_color,
+                    float mat_diffuse
+                ) {
+                    return mat_diffuse * light_color * max( dot( normal, light_dir ), 0.0 );
+                }
+
+                vec3 spec_color(
+                    vec3 normal,
+                    vec3 light_dir,
+                    vec3 eye_dir,
+                    vec3 light_color,
+                    float mat_specular,
+                    float mat_shiniess
+                ) {
+                    float cos_light_surf_normal = dot( normal, light_dir );
+
+                    if( cos_light_surf_normal <= 0.0 ) {
+                        return vec3( 0.0, 0.0, 0.0 );
+                    }
+
+                    vec3 light_reflection =
+                        2.0 * cos_light_surf_normal * normal - light_dir;
+
+                    return
+                        pow(
+                            max( dot( light_reflection, normalize( eye_dir ) ), 0.0  ),
+                            mat_shininess
+                        ) * light_color * mat_specular;
+                }
+
+                float attenuation( vec3 vector_to_light ) {
+                    float light1_dist = length( vector_to_light );
+                    float light1_atten = 1.0 / (
+                        light_attenuation_k +
+                        light_attenuation_l * light1_dist +
+                        light_attenuation_q * light1_dist * light1_dist
+                    );
+
+                    return (light1_atten / 1.0);
+                }
+
+                void main( void ) {
+                    vec3 normal_tx = normalize( mat3( model ) * surf_normal );
+                    vec3 coords_tx = ( model * vec4( coordinates, 1.0 ) ).xyz;
+
+                    gl_Position = projection * modelview * vec4( coordinates, 1.0 );
+                    vec3 eye_dir = normalize( viewer_loc - coords_tx );
+
+                    vec4 ambient_color = vec4( mat_ambient, mat_ambient, mat_ambient, 1.0 );
+
+                    // vec3 sun_dir_tx =
+                    float cos_sun_dir_surf_normal = dot( sun_dir, normal_tx );
+                    vec3 sun_diffuse_color = diff_color( normal_tx, sun_dir, sun_color, mat_diffuse );
+
+                    vec3 sun_spec_color =
+                        spec_color( normal_tx, sun_dir, eye_dir, sun_color, mat_specular, mat_shininess );
+
+                    vec4 color_from_sun = vec4( sun_diffuse_color + sun_spec_color, 1.0 );
+
+                    /* multiply color by 0 to remove it. try changing the 0 to a small number like .2
+                    and the 1 to the complement of that number (1 - .2 = .8) to see how color blending works.*/
+                    v_color =
+                        ( 0.0 * color ) +
+                        ( 1.0 * (
+                            ambient_color +
+                            color_from_sun
+                        ) );
+                    v_uv = uv;
+                }
+            `;
+
+            const GOURAUD_FRAGMENT_SHADER =
+            `   #version 300 es
+                precision mediump float;
+
+                in vec4 v_color;
+                in vec2 v_uv;
+
+                out vec4 f_color;
+
+                uniform sampler2D tex_0;
+
+                void main( void ) {
+                    f_color = v_color * texture( tex_0, v_uv );
+
+                    /* we can test depth values with this.
+                    f_color = vec4(vec3(gl_FragCoord.z), 1.0); */
+                }
+            `;
+
+            let lit_program =
+                create_compile_and_link_program(
+                    gl,
+                    /*PHONG_VERTEX_SHADER,*/ GOURAUD_VERTEX_SHADER,
+                    /*PHONG_FRAGMENT_SHADER,*/ GOURAUD_FRAGMENT_SHADER
+                );
+            let lit_program2 =
+                create_compile_and_link_program(
+                    gl,
+                    /*PHONG_VERTEX_SHADER,*/ GOURAUD_VERTEX_SHADER2,
+                    /*PHONG_FRAGMENT_SHADER,*/ GOURAUD_FRAGMENT_SHADER2
+                );
+            let lit_program3 =
+                create_compile_and_link_program(
+                    gl,
+                    /*PHONG_VERTEX_SHADER,*/ GOURAUD_VERTEX_SHADER2,
+                    /*PHONG_FRAGMENT_SHADER,*/ GOURAUD_FRAGMENT_SHADER2
+                );
+
+            gl.useProgram( lit_program );
+            set_render_params( gl );
+            gl.useProgram( lit_program2 );
+            set_render_params( gl );
+            gl.useProgram( lit_program3 );
+            set_render_params( gl );
+
+            let last_update = performance.now();
+
+            const DESIRED_TICK_RATE = 60;
+            const DESIRED_MSPT = 1000.0 / DESIRED_TICK_RATE;
+
+            const ROTATION_SPEED = 0.5; // eighth turn per second
+            const ROTATION_SPEED_PER_FRAME = ROTATION_SPEED / DESIRED_TICK_RATE;
+
+            const FLY_SPEED = 5;    // units per second
+            const FLY_SPEED_PER_FRAME = FLY_SPEED / DESIRED_TICK_RATE;
+            let jobs = [[],[],[]];
+            let lights = [[],[],[]];
+            let camera_array = [];
+            let camera_index = 1;
+            let keys = Keys.start_listening();
+
+            let scale =
+                new LitMaterial( gl, './textures/metal_scale.png', gl.LINEAR, 0.25, 1, 8, 16 );
+
+            let sky_dome_texture =
+                new LitMaterial( gl, './textures/dune_sky.jpg', gl.LINEAR, 0.25, 1, 8, 16 );
+
+            let carpet_material =
+                new LitMaterial( gl, './textures/actual_carpet.png', gl.LINEAR, 0.25, 1, 2, 4 );
+            //https://svs.gsfc.nasa.gov/cgi-bin/details.cgi?aid=4720
+            let moon =
+                new LitMaterial( gl, './textures/nasamoon.jpg', gl.LINEAR, 0.25, 1/5, 8*6, 16*6);
+
+            let pebbles =
+                new LitMaterial( gl, './textures/pebbles_seamless.png', gl.LINEAR, 0.25, 1, 32, 64);
+
+            let soil =
+                new LitMaterial( gl, './textures/soil.jpg', gl.LINEAR, 0.125, 1, 8, 16);
+
+            let backplate_text =
+                new LitMaterial( gl, './textures/backplate_texture.png', gl.LINEAR, 0.25, 1, 8, 32);
+
+            let white =
+                new LitMaterial( gl, './textures/whitebox.jpg', gl.LINEAR, 0.25, 1, 8, 32);
+
+
+            let scene = new Scene();
+
+            scene.set_sun_color(0.25,0.25,0.25);
+            scene.set_sun_direction(0,3,0);
+
+            let map_size = 6;
+            let length = Math.pow(2,map_size) + 1;
+
+            let our_array = [];
+
+            let scalex = 6;
+            let center_row = parseInt((2**scalex)/2);
+            let center_col = center_row;
+            diamond_square(our_array, scalex, 5, -1, 1, center_row, center_col, center_col);
+
+            let carpet_starting_height = (argmax(our_array)) + 4;
+
+            let roof = true;
+            let map_top_left = NormalMesh.from_heightmap(gl,lit_program2, our_array, -1, 1, soil);
+            let map_top_right = NormalMesh.from_heightmap(gl,lit_program2, our_array, -1, 1, soil);
+            let map_bot_right = NormalMesh.from_heightmap(gl,lit_program2, our_array, -1, 1, soil);
+            let map_bot_left = NormalMesh.from_heightmap(gl,lit_program2, our_array, -1, 1, soil);
+            let platform = NormalMesh.platform(gl, lit_program2, 1, 2, 0, 1, backplate_text); //prop blades
+            let cube = NormalMesh.box(gl, lit_program, 1, 1, 1 , carpet_material); //carpet
+            let uv_sphere = NormalMesh.uv_sphere(gl, lit_program3, 1, 16,moon);
+            let sky_dome_sphere = NormalMesh.uv_sphere(gl, lit_program, 1, 16,sky_dome_texture);
+            let small_planet = NormalMesh.uv_sphere(gl, lit_program3, 1, 16, soil);
+
+
+            let triangle = NormalMesh.triangle(gl, lit_program, 4, 4, 0, 1, scale);
+            let uv_cylinder = NormalMesh.uv_cylinder(gl, lit_program, 0.65, 16, scale, 0); //stripper pole
+            // let uv_cylinder_booster = NormalMesh.uv_cylinder(gl, lit_program, 0.65, 16, white, 0); //stripper pole
+            let uv_cylinder_lip = NormalMesh.uv_cylinder(gl, lit_program2, 0.65, 16, scale, 1); //stripper pole
+
+            let uv_cylinder_flipped = NormalMesh.uv_cylinder(gl, lit_program, 0.65, 16, white, 1); //boosters
+            let terrain_scale = 40;
+
+            let terrain_top_left = scene.create_node(center_row * terrain_scale + terrain_scale, 0,
+                center_col * terrain_scale, 0, 0, 0, terrain_scale, terrain_scale, terrain_scale, map_top_left, 1 ); //
+
+            let terrain_top_right = scene.create_node(-center_row * terrain_scale, 0,
+                center_col * terrain_scale, 0, 0, 0, -terrain_scale, terrain_scale, terrain_scale, map_top_right, 1 ); //
+
+            let terrain_bot_right = scene.create_node(center_row * terrain_scale + terrain_scale, 0,
+                -center_col * terrain_scale - terrain_scale, 0, 0, 0, terrain_scale, terrain_scale, -terrain_scale, map_bot_right, 1 ); //
+
+            let terrain_bot_left = scene.create_node(-center_row * terrain_scale, 0,
+                -center_col * terrain_scale - terrain_scale, 0, 0, 0, -terrain_scale, terrain_scale, -terrain_scale, map_bot_left, 1 ); //
+
+            let world_dome = scene.create_node(0,0,0,0,0,0,400*2,400*2,400*2, sky_dome_sphere, 0)
+            let body = scene.create_node(0, carpet_starting_height * terrain_scale, 3, 0, 0, 0, 1, 1, 1, undefined, 1); //carpet
+            scene.camera_node.x = body.x;
+            scene.camera_node.y = body.y +4;
+            scene.camera_node.z = body.z - 10;
+            scene.camera_node.add_pitch(-0.125/2);
+
+            let carpet = body.create_child_node(0,0,3,0.25,0,0,10,0.01,5,cube, 0); //carpet)
+            let back_face = carpet.create_child_node(0.5, 0, 0, -0.5, 0, 0.75, 1/0.01, 1, 1/2, platform, 1);
+            let back_booster = back_face.create_child_node(0, 0.0375/1.125, 0, 0, 0, 0, .5, 0.25/5, .25, uv_cylinder_flipped, 0 );
+            back_booster.create_child_node(0, 0, 0, 0, 0.5, 0, 0.1, 1, 0.5, platform,1)
+            back_booster.create_child_node(0, 0, 0, 0.25, 0.5, 0, 0.1, 1, 0.5, platform,1)
+            camera_node = body.create_child_node(0, 8, -20, 0, 0, 0, 1, 1, 1, undefined, -1); //tail that is supposed to the body
+
+            camera_node.add_pitch(-0.055);
+
+            let platform_pointlight = new NodeLight( 1, 0.0, 0.0, false, 1 );
+            let platform_pointlight1 = new NodeLight( 1, 0.0, 0.0, false, 2 );
+            let platform_pointlight2 = new NodeLight( 1, 0.0, 0.0, false, 3 );
+            let platform_pointlight3 = new NodeLight( 1, 0.0, 0.0, false, 4 );
+            let platform_pointlight4 = new NodeLight( 0.0, 0.0, 0.0, false, 5 );
+
+            let pole = body.create_child_node(0,2,3,0,0,0,1/8, 3, 1/8, uv_cylinder_flipped,0);
+            let dome = pole.create_child_node(0,0.5,0,0,0,0,1/0.225,1/4,1/0.225,uv_sphere, 2);
+            let invis = pole.create_child_node(0,0.5,0,0,0,0,1/0.225,1/4,1/0.225,undefined, 0)
+            let orbiting_dome = invis.create_child_node(3,0,0,0,0,0,1/2,1/2,1/2,uv_sphere, 2);
+            let orbit_pointlight = new NodeLight( 0.0, 0.0, 1.0, false, 6);
+            let invis2 = orbiting_dome.create_child_node(3, 0, 0, 0, 0, 0, 1/2, 1/2, 1/2, undefined, 0);
+            let invis2_light = invis2.create_child_node(0, 0, 2, 0, 0, 0, 1, 1, 1, orbit_pointlight, 2);
+            let orbiting_dome2 = invis2.create_child_node(-3,6,0,0,0,0,1,1,1,small_planet, 2);
+            pole.create_child_node(0,0.5,0,0,0,0,1/0.225,1/2,1/0.225, platform_pointlight4);
+
+            let booster1 = body.create_child_node(-1.75, -0.35, 3*2.35, 0, 0, 0, 1, 1/2, 1, uv_cylinder_flipped, 0);
+            let lip1 = body.create_child_node(-1.75, -0.78, 3*2.35, 0, 0, 0, 1, 1/6, 1,uv_cylinder_lip, 1)
+                booster1.create_child_node(0, 0, 0, 0, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster1.create_child_node(0, 0, 0, 0.25, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster1.create_child_node(0, -1, 0, 0, 0, 0, 1, 1, 1, platform_pointlight,1);
+
+            let booster2 = body.create_child_node(1.75, -0.35, 3*2.35, 0, 0, 0, 1, 1/2, 1, uv_cylinder_flipped,0);
+            let lip2 = body.create_child_node(1.75, -0.78, 3*2.35, 0, 0, 0, 1, 1/6, 1,uv_cylinder_lip, 1)
+                booster2.create_child_node(0, 0, 0, 0, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster2.create_child_node(0, 0, 0, 0.25, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster2.create_child_node(0, -1, 0, 0, 0, 0, 1, 1, 1, platform_pointlight1,1);
+
+            let booster3 = body.create_child_node(-1.75, -0.35, -1, 0, 0, 0, 1, 1/2, 1, uv_cylinder_flipped,0);
+            let lip3 = body.create_child_node(-1.75, -0.78, -1, 0, 0, 0, 1, 1/6, 1,uv_cylinder_lip, 1)
+                booster3.create_child_node(0, 0, 0, 0, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster3.create_child_node(0, 0, 0, 0.25, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster3.create_child_node(0, -1, 0, 0, 0, 0, 1, 1, 1, platform_pointlight2,1);
+
+            let booster4 = body.create_child_node(1.75, -0.35, -1, 0, 0, 0, 1, 1/2, 1, uv_cylinder_flipped,0);
+            let lip4 = body.create_child_node(1.75, -0.78, -1, 0, 0, 0, 1, 1/6, 1,uv_cylinder_lip, 1)
+                booster4.create_child_node(0, 0, 0, 0, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster4.create_child_node(0, 0, 0, 0.25, 0.5, 0, 0.1, 1, 0.5, platform,1); //
+                booster4.create_child_node(0, -1, 0, 0, 0, 0, 1, 1, 1, platform_pointlight3,1);
+
+            let projection = Mat4.perspective_fovx( 0.125, 4 / 3, 0.125, 1024 );
+            let programs = [lit_program, lit_program2, lit_program3];
+
+            last_update = performance.now();
+            let flag = true;
+            let going_up = true;
+            let auto_movement = 0;
+            let gyro_rate = 0.00050;
+
+            function render( now ) {
+                gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+                let time_delta = (now - last_update) / 1000;
+
+                jobs = [[],[],[]];
+                lights = [[],[],[]];
+                camera_array = [];
+                body.add_roll(gyro_rate*-accel_x);
+                body.add_pitch(gyro_rate*accel_y);
+                body.add_yaw(gyro_rate*-accel_z);
+                if (camera_index == 1) {
+                    world_dome.x = body.x;
+                    world_dome.y = body.y;
+                    world_dome.z = body.z;
+                } else {
+                    world_dome.x = scene.camera_node.x;
+                    world_dome.y = scene.camera_node.y;
+                    world_dome.z = scene.camera_node.z;
+                }
+                if (auto_movement) {
+                    body.move_in_direction( 0, 0, FLY_SPEED_PER_FRAME * 20 );
+                    back_booster.children[0].spin_blade(0.1 / 2);
+                    back_booster.children[1].spin_blade(0.1 / 2);
+                }
+
+                back_booster.children[0].spin_blade(0.1/16);
+                back_booster.children[1].spin_blade(0.1/16);
+                pole.children[0].spin_blade(0.01/2);
+                invis.spin_blade(-0.01/2);
+                invis2_light.orbit_roll(-0.01/24);
+                orbiting_dome.orbit_roll(0.1/24)
+
+                // if ( going_up ) {
+                //     //orbiting_dome2.move_in_direction(0, 0.002, 0);
+                //     // orbiting_dome.move_in_direction(0, 0.002, 0);
+                // }
+                //
+                // if ( !going_up ) {
+                //     // orbiting_dome2.move_in_direction(0, -0.002, 0);
+                //     // orbiting_dome.move_in_direction(0, -0.002, 0);
+                // }
+                // console.log(orbiting_dome)
+                if (orbiting_dome2.y > 100) {
+                    going_up = !going_up;
+                }
+
+                if ( orbiting_dome2.y < 98.8 ) {
+                    going_up = !going_up;
+                }
+
+                booster1.children[0].spin_blade(0.1/6);
+                booster1.children[1].spin_blade(0.1/6);
+                booster2.children[0].spin_blade(0.1/6);
+                booster2.children[1].spin_blade(0.1/6);
+                booster3.children[0].spin_blade(0.1/6);
+                booster3.children[1].spin_blade(0.1/6);
+                booster4.children[0].spin_blade(0.1/6);
+                booster4.children[1].spin_blade(0.1/6);
+
+                scene.generate_render_batch(jobs, lights, camera_array);
+
+                requestAnimationFrame( render );
+
+                if (flag) {
+                    console.log(jobs)
+                    flag = !flag
+                }
+
+                for (let i = 0; i < jobs.length; i++) {
+
+                    let current_program = programs[i];
+                    gl.useProgram(current_program);
+                    scene.bind_sun(gl, current_program);
+                    // scene.bind_sun(gl, lit_program2);
+                    lights[i].forEach( element => {
+                        if (element.color.directional !== 1) {
+                            //console.log(element)
+                            let light = new Light(element.loc.x, element.loc.y, element.loc.z,
+                                element.color.r, element.color.g,element.color.b, element.color.number);
+                            light.bind(gl, current_program);//gl, current_program, element.loc
+                        }
+                    });
+
+                    jobs[i].forEach( element => {
+                        let model = element.matrix;
+                        let view = camera_array[camera_index]; //var
+
+                        let modelview = view.mul( model );
+
+                        set_uniform_matrix4( gl, current_program, 'projection', projection.data );
+                        set_uniform_matrix4( gl, current_program, 'modelview', modelview.data );
+                        set_uniform_matrix4( gl, current_program, 'model', model.data );
+                        set_uniform_matrix4( gl, current_program, 'view', view.data );
+
+                        set_uniform_vec3( gl, current_program, 'viewer_loc', view.x, view.y, view.z );
+
+                        let err = gl.getError();
+
+                        if ( err != 0 ) {
+                            console.log(element);
+                            console.log(toString(programs[i]));
+                            throw new Error( 'invalid program. Error: ' + err );
+                        }
+
+                        if (element.mesh.material.loaded === true) {
+                            element.mesh.render(gl);
+                        }
+
+                    });
+                }
+
+            }
+
+            const KEYMAP = {
+                'KeyR': function () {
+                    if (roof) {
+                        scene.generate_render_batch(jobs, lights);
+                        // console.log(jobs)
+                        // console.log(lights);
+                        roof = !roof;
+                     }
+                },
+                'KeyW': function() {
+                    body.move_in_direction(0, 0, FLY_SPEED_PER_FRAME * 20);
+                    back_booster.children[0].spin_blade(0.1 / 2);
+                    back_booster.children[1].spin_blade(0.1 / 2);
+
+                    },
+                'KeyS': function() {
+                    body.move_in_direction( 0, 0, -FLY_SPEED_PER_FRAME * 20 );
+                    back_booster.children[0].spin_blade(-0.1/2);
+                    back_booster.children[1].spin_blade(-0.1/2);
+                    },
+                'KeyA': function() {
+                    body.move_in_direction( -FLY_SPEED_PER_FRAME, 0, 0 );
+                    },
+                'KeyD': function() {
+                    body.move_in_direction( FLY_SPEED_PER_FRAME, 0, 0);
+                    },
+                'Space': function() {
+                    body.move_in_direction( 0, FLY_SPEED_PER_FRAME, 0 );
+                    booster1.children[0].spin_blade(0.1);
+                    booster1.children[1].spin_blade(0.1);
+                    booster2.children[0].spin_blade(0.1);
+                    booster2.children[1].spin_blade(0.1);
+                    booster3.children[0].spin_blade(0.1);
+                    booster3.children[1].spin_blade(0.1);
+                    booster4.children[0].spin_blade(0.1);
+                    booster4.children[1].spin_blade(0.1);
+                    },
+                'KeyC': function() {
+                    body.move_in_direction( 0, -FLY_SPEED_PER_FRAME, 0 );
+                    // world_dome.move_in_direction( 0, -FLY_SPEED_PER_FRAME, 0 );
+                },
+                'KeyQ': function() {
+                    body.add_roll( -ROTATION_SPEED_PER_FRAME );
+                    },
+                'KeyE': function() {
+                    body.add_roll( ROTATION_SPEED_PER_FRAME );
+                    },
+                'ArrowLeft': function() {
+                    body.add_yaw( -ROTATION_SPEED_PER_FRAME );
+                    },
+                'ArrowRight': function() {
+                    body.add_yaw( ROTATION_SPEED_PER_FRAME );
+                    },
+                'ArrowUp': function() {
+                    body.add_pitch( -ROTATION_SPEED_PER_FRAME );
+                    },
+                'ArrowDown': function() {
+                    body.add_pitch( ROTATION_SPEED_PER_FRAME );
+                    },
+                'KeyM': function() {
+                    helicopter.volume = 0.01;
+                    if (helicopter.paused) {
+                        helicopter.play();
+                    }
+                },
+                'KeyN': function() {
+                    helicopter.pause();
+                },
+                'Digit1': function() {
+                    camera_index = 1;
+                },
+                'Digit2': function() {
+                    camera_index = 0;
+                },
+                'KeyO': function() {
+                    // console.log(auto_movement);
+                    if (!auto_movement) {
+                        auto_movement = 1;
+                    }
+                },
+                'KeyI': function() {
+                    // console.log(auto_movement);
+                    if (auto_movement) {
+                        auto_movement = 0;
+                    }
+                }
+            };
+
+            function update() {
+
+                let keys_down = keys.keys_down_list();
+                // console.log(keys_down);
+                for( const key of keys_down ) {
+                   let bound_function = KEYMAP[ key ];
+
+                   if( bound_function ) {
+                       bound_function();
+                   }
+                }
+
+                return;
+            }
+
+            function square_step(map, scale, roughness, min_height, max_height,
+                                 center_row, center_col, radius_prior){
+                // console.log(radius_prior);
+                let radius = radius_prior;
+
+                let top = center_row - radius;
+                let bottom = center_row + radius;
+
+                let left = center_col - radius;
+                let right = center_col + radius;
+
+                let our_coords = [[top, center_col], // TOP
+                    [bottom, center_col], //BOTTOM
+                    [center_row, left], //LEFT
+                    [center_row, right]]; //RIGHT
+
+                our_coords.forEach(x=>{
+                    let our_top = x[0] - radius;
+                    let our_bottom = x[0] + radius;
+                    let our_left = x[1] - radius;
+                    let our_right = x[1] + radius;
+
+                    //LEFT Y,X = x[0], our_left
+                    //RIGHT Y,X = x[0], our_right
+
+                    //TOP Y,X = our_top, x[1]
+                    //BOTTOM Y,X = our_bottom, x[1]
+                    let top_val = 1;
+                    let bottom_val = 1;
+                    let left_val = 1;
+                    let right_val = 1;
+
+                    if(our_top < 0){
+                        top_val = 0;
+                    }
+                    if(our_bottom >= map.length){
+                        bottom_val = 0;
+                    }
+                    if(our_left < 0){
+                        left_val = 0;
+                    }
+                    if(our_right >= map.length){
+                        right_val = 0;
+                    }
+
+                    let denom = top_val + bottom_val + left_val + right_val;
+
+                    //LEFT Y,X = x[0], our_left
+                    //RIGHT Y,X = x[0], our_right
+
+                    //TOP Y,X = our_top, x[1]
+                    //BOTTOM Y,X = our_bottom, x[1]
+
+                    if(top_val==1){
+                        top_val = map[our_top][x[1]];
+                    }
+                    if(bottom_val==1){
+                        bottom_val = map[our_bottom][x[1]];
+                    }
+
+                    if(left_val==1){
+                        left_val = map[x[0]][our_left];
+                    }
+                    if(right_val==1){
+                        right_val = map[x[0]][our_right];
+                    }
+
+
+                    map[x[0]][x[1]] = ((top_val+left_val+bottom_val+right_val)/denom) +
+                        ( ( Math.random() * (max_height - min_height ) ) + min_height ) * roughness;
+
+
+                    //~ console.log(top_val, bottom_val, left_val, right_val);
+                    //console.log(our_top, our_bottom, our_left, our_right);
+                });
+                //~ console.log(our_coords);
+
+                //~ let top_top_row = top-radius;
+                //~ let top_top_col = center_col;
+
+                //~ let top_left_row = center_row;
+                //~ let top_left_col = center_col-radius;
+
+                //~ let top_right_row = center_row;
+                //~ let top_right_col = -radius;
+
+                //~ let top_bottom_row = top-radius;
+                //~ let top_bottom_col = center_col;
+
+
+
+                //~ console.log("Radius:", radius);
+            }
+
+            function diamond_step(map, scale, roughness, min_height, max_height,
+                                  center_row, center_col, radius_prior){
+                let radius = radius_prior;
+
+                let top = center_row - radius;
+                let bottom = center_row + radius;
+
+                let left = center_col - radius;
+                let right = center_col + radius;
+
+                //Adds the sum of the corners to us
+                map[center_row][center_col] = (map[top][left]+ map[bottom][left] +
+                        map[top][right] + map[bottom][right])/4
+                    + ( ( Math.random() * ( max_height - min_height ) ) + min_height ) * roughness;
+            }
+
+            function diamond_square(map, scale, roughness, min_height, max_height,
+                                    center_row, center_col, radius_prior){
+                // console.log("X ", center_col, "Y ", center_row);
+                if( radius_prior === 0 ){
+                    //~ console.log("Complete");
+                    return;
+                }
+
+                //2 to the power of scale tells us how big our array is
+                //divide by two to get the middle
+                let radius = parseInt((2**scale)/2);
+                if(map == undefined){
+                    map = [];
+                }
+                if(map.length == 0){
+                    //~ console.log("No map, initializing map");
+                    for(let row = 0; row< (2**scale)+1;row++){
+                        map.push([]);
+                        for(let col = 0; col< (2**scale)+1;col++){
+                            map[row].push(0);
+                        }
+                    }
+                    //Diamond step
+
+                    //Initialize the four corners
+                    //TOP LEFT
+                    map[0][0] = ( (Math.random() * (max_height - min_height))+min_height ) * roughness;
+                    //TOP RIGHT
+                    map[0][2**scale] = ( ( Math.random() * (max_height - min_height) )+min_height ) * roughness;
+                    //BOTTOM LEFT
+                    map[2**scale][0] = ( ( Math.random() * ( max_height - min_height ) ) + min_height ) * roughness;
+                    //BOTTOM RIGHT
+                    map[2**scale][2**scale] = ( ( Math.random() * ( max_height - min_height ) ) + min_height ) * roughness;
+
+                    //The first time we run the step we set the middle to 0
+
+                    //~ console.log("Center row, center_col", center_row, center_col);
+
+                }
+                //~ console.log(map);
+
+                diamond_step(map, scale, roughness, min_height, max_height,
+                    center_row, center_col, radius_prior);
+
+                square_step(map, scale, roughness, min_height, max_height,
+                    center_row, center_col, radius_prior);
+
+                //~ console.log(parseInt(radius/2));
+                //TOP LEFT
+                diamond_square(map, parseInt(scale/2), roughness/2, min_height, max_height,
+                    center_row - parseInt(radius_prior/2), center_col - parseInt(radius_prior/2), parseInt(radius_prior/2));
+
+                //~ //TOP RIGHT
+                diamond_square(map, parseInt(scale/2), roughness/2, min_height, max_height,
+                    center_row - parseInt(radius_prior/2), center_col + parseInt(radius_prior/2), parseInt(radius_prior/2));
+
+                //BOTTOM LEFT
+                diamond_square(map, parseInt(scale/2), roughness/2, min_height, max_height,
+                    center_row + parseInt(radius_prior/2), center_col - parseInt(radius_prior/2), parseInt(radius_prior/2));
+
+                //BOTTOM RIGHT
+                diamond_square(map, parseInt(scale/2), roughness/2, min_height, max_height,
+                    center_row + parseInt(radius_prior/2), center_col + parseInt(radius_prior/2), parseInt(radius_prior/2));
+
+            }
+            function argmax(map) {
+                let max = 0;
+                for (let i = 0; i < map.length; i++) {
+                    for (let j = 0; j < map[0].length; j++) {
+                        if (map[i][j] > max) {
+                            max = map[i][j];
+                        }
+                    }
+                }
+                return max;
+            }
+
+            requestAnimationFrame( render );
+            setInterval( update, DESIRED_MSPT );
+
+        </script>
+        <div>
+            <ul id="me">
+                <li>Welcome to Microsoft Flight Simulator</li>
+                <li>WASD -> General movements</li>
+                <li>Q/E -> ROLL</li>
+                <li>C/SPACE -> UP AND DOWN</li>
+                <li>ARROW KEYS -> PITCH/YAW</li>
+            </ul>
+            <ul id="you">
+                <li>M -> INTERGALACTIC RADIO ON</li>
+                <li>N -> INTERGALACTIC RADIO OFF</li>
+                <li>1,2 -> SWITCH FROM TRACKING TO STATIC CAMERA</li>
+                <li>O -> CRUISE CONTROL ON</li>
+                <li>I -> CRUISE CONTROL OFF</li>
+            </ul>
+        </div>
+    </div>
+    </body>
+</html>

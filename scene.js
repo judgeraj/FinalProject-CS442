@@ -1,15 +1,18 @@
 class NodeLight {
-    constructor(r, g, b, point) {
+    constructor(r, g, b, point, num) {
         this.r = r;
         this.g = g;
         this.b = b;
-        this.directional = point ? 1:0;
+        this.directional = point ? 1 : 0;
         this.is_the_sun = point;
+        this.number = num;
+
+
     }
 }
 
 class Node {
-    constructor( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data ) {
+    constructor( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data, group ) {
         this.x = x;
         this.y = y;
         this.z = z;
@@ -25,6 +28,9 @@ class Node {
         this.data = data;
 
         this.children = [];
+
+        this.render_group = group ?? 0
+
     }
 
     add_yaw( amount ) {
@@ -37,6 +43,10 @@ class Node {
         if( this.yaw > 1 ) {
             this.yaw = this.yaw % 1;
         }
+    }
+
+    spin_blade( amount ) {
+        this.yaw += amount;
     }
 
     add_pitch( amount ) {
@@ -53,6 +63,10 @@ class Node {
         this.scale_x = x;
         this.scale_y = y;
         this.scale_z = z;
+    }
+
+    orbit_roll( amount ) {
+        this.roll += amount;
     }
 
     add_roll( amount ) {
@@ -105,13 +119,14 @@ class Node {
 
         // note: I deliberately changed the order here by applying scale last, so that I could
         // do the "breathing" effect.
-        matrix = matrix.mul( Mat4.scale( this.scale_x, this.scale_y, this.scale_z ) );
-
         matrix = matrix.mul( Mat4.translation( this.x, this.y, this.z ) );
 
         matrix = matrix.mul( Mat4.rotation_xz( this.yaw ) );
         matrix = matrix.mul( Mat4.rotation_yz( this.pitch ) );
         matrix = matrix.mul( Mat4.rotation_xy( this.roll ) );
+
+        matrix = matrix.mul( Mat4.scale( this.scale_x, this.scale_y, this.scale_z ) );
+
 
         return matrix;
     }
@@ -120,8 +135,8 @@ class Node {
         return this.get_matrix().inverse();
     }
 
-    create_child_node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data ) {
-        let child = new Node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data );
+    create_child_node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data, group) {
+        let child = new Node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data, group);
         this.children.push( child );
 
         return child;
@@ -133,19 +148,23 @@ class Node {
         return matrix.get_transformed_coordinates();
     }
 
-    generate_render_batch( parent_matrix, jobs, lights ) {
+    generate_render_batch( parent_matrix, jobs, lights, camera_view) {
         let matrix = parent_matrix.mul( this.get_matrix() );
 
         if( this.data instanceof NodeLight ) {
             if( !this.data.is_the_sun ) {
                 let coords = matrix.get_transformed_coordinates();
-                lights.push( new RenderLight( coords, this.data ) );
+                lights[this.render_group].push( new RenderLight( coords, this.data ) );
             }
         }
         else if( this.data instanceof NormalMesh ) {
-            jobs.push( new RenderMesh( matrix, this.data ) )
+            jobs[this.render_group].push( new RenderMesh( matrix, this.data, this.render_group ) )
+        }
+        else if (this.render_group === -1) {
+            camera_view.push(matrix.inverse());
         }
         else if( this.data == null ) {
+            // console.log(this);
             // do nothing
         }
         else {
@@ -157,7 +176,7 @@ class Node {
         }
 
         for( let child of this.children ) {
-            child.generate_render_batch( matrix, jobs, lights );
+            child.generate_render_batch( matrix, jobs, lights, camera_view );
         }
     }
 }
@@ -170,20 +189,21 @@ class RenderLight {
 }
 
 class RenderMesh {
-    constructor( matrix, mesh ) {
+    constructor( matrix, mesh, render_group ) {
         this.matrix = matrix;
         this.mesh = mesh;
+        this.render_group = render_group
     }
 }
 
 class Scene {
 
     constructor() {
-        this.root = new Node( 0, 0, 0, 0, 0, 0, 1, 1, 1 );
-        this.camera_node = this.root;
+        this.root = new Node( 0, 0, 0, 0, 0, 0, 1, 1, 1, undefined, 0 );
+        this.camera_node = this.root.create_child_node( 10, 10, -20, 0, 0, 0, 1, 1, 1, undefined, -1 );
         this.sun_node =
             this.root.create_child_node(
-                0, 1, 0, 0, 0, 0, 1, 1, 1, new NodeLight( 1, 1, 1, true ) );
+                0, 1, 0, 0, 0, 0, 1, 1, 1, new NodeLight( 1, 1, 1, true ), 0 );
     }
 
     set_sun_color( r, g, b ) {
@@ -213,8 +233,8 @@ class Scene {
         set_uniform_vec3( gl, program, 'sun_color', sun.data.r, sun.data.g, sun.data.b );
     }
 
-    generate_render_batch( jobs, lights ) {
-        this.root.generate_render_batch( Mat4.identity(), jobs, lights );
+    generate_render_batch( jobs, lights, camera_view) {
+        this.root.generate_render_batch( Mat4.identity(), jobs, lights, camera_view );
     }
 
     get_camera_view() {
@@ -225,8 +245,8 @@ class Scene {
         this.camera_node = node;
     }
 
-    create_node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data ) {
-        let node = this.root.create_child_node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data );
+    create_node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data, group) {
+        let node = this.root.create_child_node( x, y, z, yaw, pitch, roll, s_x, s_y, s_z, data, group);
         return node;
     }
 

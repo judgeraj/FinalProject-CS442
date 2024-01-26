@@ -10,16 +10,21 @@ class NormalMesh {
      * @param {number[]} vertices
      * @param {number[]} indices
     */
-    constructor( gl, program, vertices,indices, material, use_color) {
+    constructor( gl, program, vertices,indices, material, use_color, tex_coords, norm_coords) {
         this.vertices = create_and_load_vertex_buffer(gl, vertices, gl.STATIC_DRAW);
         this.indis = create_and_load_elements_buffer(gl, indices, gl.STATIC_DRAW);
 
         this.n_verts = vertices.length / VERTEX_STRIDE * 4;
         this.n_indis = indices.length;
+
+        // console.log(this.n_verts, this.n_indis);
+
         this.program = program;
         this.material = material;
-
         this.use_color = use_color ?? false;
+
+        this.tex_coords = create_and_load_elements_buffer(gl, tex_coords, gl.STATIC_DRAW);
+        this.norm_coords = create_and_load_elements_buffer(gl, norm_coords, gl.STATIC_DRAW);
     }
 
     set_vertex_attributes() {
@@ -105,8 +110,32 @@ class NormalMesh {
             20, 23, 22, 22, 21, 20,
         ];
 
+        let tex_coords = [indis.length].fill(0);
+        let norm_coords = [indis.length].fill(0);
+
+        return new NormalMesh( gl, program, verts, indis, material, false, tex_coords, norm_coords);
+    }
+
+
+    /**
+     * Create a flat platform in the xz plane.
+     * @param {WebGLRenderingContext} gl
+     */
+    static triangle( gl, program, width, depth, uv_min, uv_max, material ) {
+        let hwidth = width / 2;
+        let hdepth = depth / 2;
+
+        let verts = [
+            0, 0, 0,   1.0, 1.0, 1.0, 1.0,     uv_min, uv_max,   0.0, 1.0, 0.0,
+            0, 1, 0,     1.0, 1.0, 1.0, 1.0,     uv_max, uv_max,   0.0, 1.0, 0.0,
+            1, 0, 0,      1.0, 1.0, 1.0, 1.0,     uv_max, uv_min,   0.0, 1.0, 0.0,
+        ];
+
+        let indis = [ 0, 1, 2, ];
+
         return new NormalMesh( gl, program, verts, indis, material, false );
     }
+
 
     /**
      * Create a flat platform in the xz plane.
@@ -218,12 +247,14 @@ class NormalMesh {
      * @param {WebGLRenderingContext} gl 
      */
     render( gl ) {
-        // gl.enable( gl.CULL_FACE );
-        
+        // gl.enable( gl.FRONT_AND_BACK );
+        // gl.frontFace();
+
         gl.useProgram( this.program );
         this.set_vertex_attributes();
         gl.bindBuffer( gl.ARRAY_BUFFER, this.vertices);
         gl.bindBuffer( gl.ELEMENT_ARRAY_BUFFER, this.indis );
+
         bind_texture_samplers( gl, this.program, "tex_0" );
 
         gl.activeTexture( gl.TEXTURE0 );
@@ -232,7 +263,80 @@ class NormalMesh {
         set_uniform_int( gl, this.program, 'use_color', this.use_color );
 
         gl.drawElements( gl.TRIANGLES, this.n_indis, gl.UNSIGNED_SHORT, 0 );
+        // gl.drawElements( gl.TRIANGLES, this.tex_coords, gl.UNSIGNED_SHORT, 0 );
+        // gl.drawElements( gl.TRIANGLES, this.norm_coords, gl.UNSIGNED_SHORT, 0 );
 
+    }
+    static uv_cylinder( gl, program, radius, subdivisions, material ,flip) {
+        let verts = [];
+        let indices = [];
+        let TAU = 2 * Math.PI;
+
+        let angle = Math.PI / 2;
+        let adjustment_diff = -(Math.PI/subdivisions)
+
+        for ( let layer = 0; layer <= subdivisions; layer++ ) {
+
+            let y_turns = layer / subdivisions / 2;
+            let y = Math.cos(y_turns * TAU);
+            y *= radius;
+
+            for ( let subdiv = 0; subdiv <= subdivisions; subdiv++ ) {
+
+                // let adjustment = Math.cos(angle);
+
+                let turns = subdiv/subdivisions;
+                let rads = turns * TAU;
+
+                let x = Math.cos(rads) * radius;
+                let z = Math.sin(rads) * radius;
+
+                let u = subdiv / subdivisions;
+                let v = layer / subdivisions;
+
+                // console.log(x,y,z);
+
+                verts.push(x,y,z);
+                verts.push(1, 1, 1, 1);
+                verts.push(u, v);
+                if (flip) {
+                    verts.push(-x,-y,-z);
+                } else {
+                    verts.push(x,y,z);
+                }
+
+            }
+
+            angle += adjustment_diff;
+
+        }
+
+        // console.log(verts);
+        for ( let layer = 0; layer < subdivisions; layer++ ) {
+            let index = layer * (subdivisions + 1);
+            let index_2 = index + subdivisions + 1;
+            for ( let subdiv = 0; subdiv < subdivisions; subdiv++ ) {
+                //adding one indice starting from the upper layer
+                indices.push(index);
+                //adding 2nd indice from the lower layer
+                indices.push(index_2);
+                //adding third indice starting from the upper layer and over 1 position
+                indices.push(index + 1);
+
+                //starting from the upper layer indice + 1
+                indices.push(index + 1);
+                //lower layer indice directly below index
+                indices.push(index_2);
+                //adding third indice of 2nd triangle from the lower layer + 1
+                indices.push(index_2 + 1);
+
+                index_2++;
+                index++;
+
+            }
+        }
+        // console.log(indices)
+        return new NormalMesh( gl, program, verts, indices, material, false );
     }
 
     /**
@@ -259,27 +363,27 @@ class NormalMesh {
             let radius_scale_for_layer = Math.sin( 2 * Math.PI * y_turns );
 
             for( let subdiv = 0; subdiv <= subdivs; subdiv++ ) {
-                let turns = subdiv / subdivs; 
+                let turns = subdiv / subdivs;
                 let rads = 2 * Math.PI * turns;
-    
+
                 let x = Math.cos( rads ) / 2 * radius_scale_for_layer;
                 let z = Math.sin( rads ) / 2 * radius_scale_for_layer;
 
                 let point_norm = new Vec4( x, y, z, 0.0 ).norm();
                 let scaled_point = point_norm.scaled( radius );
-                
+
                 // coordinates
                 verts.push( scaled_point.x, scaled_point.y, scaled_point.z );
 
                 // console.log( layer, subdiv, scaled_point.x, scaled_point.y, scaled_point.z );
-                
+
                 // color (we're making it white for simplicity)
                 verts.push( 1, 1, 1, 1 );
 
                 // uvs
                 verts.push( subdiv / subdivs, layer / subdivs );
-                
-                // normal vector. make sure you understand why the normalized coordinate is 
+
+                // normal vector. make sure you understand why the normalized coordinate is
                 // equivalent to the normal vector for the sphere.
                 verts.push( point_norm.x, point_norm.y, point_norm.z );
             }
@@ -314,7 +418,13 @@ class NormalMesh {
         let lines = text.split( /\r?\n/ );
 
         let verts = [];
+        let color = [];
+        let vertex_normals = [];
+        let uv_verts = [];
+
         let index = [];
+        let tex_coords = [];
+        let norm_coords = [];
 
         for( let line of lines ) {
             let trimmed = line.trim();
@@ -331,15 +441,77 @@ class NormalMesh {
                 verts.push( parseFloat( parts[4] ) );
                 verts.push( parseFloat( parts[6] ) );
                 // color data
-                verts.push( 1, 1, 1, 1 );
+                color.push( 1, 1, 1, 1 );
+                // verts.push(0,0);
+                // verts.push(0,0,0);
             } else if ( parts[0] === 'f' ) {
-                index.push(parseFloat(parts[2],parts[4],parts[6]));//, parseFloat(indices[1]), parseFloat(indices[2])
+                // console.log(parseInt(parts[2]) - 1,parts[4], parts[6]);
+                // index.push(parseInt(parts[2]) - 1, parseInt(parts[4]) - 1, parseInt(parts[6]) - 1);
+                parts.forEach( part => {
+                    if (part !== 'f' && part !== ' ') {
+
+                        let indices = part.split('/');
+                        //console.log(indices[0]);
+                        index.push(parseInt(indices[0]) - 1);//, parseFloat(indices[1]), parseFloat(indices[2])
+                        tex_coords.push(parseInt(indices[1]));
+                        norm_coords.push(parseInt(indices[2]));
+                        // // console.log(indices);
+                        // // console.log(indices)
+                        // //
+                        // if ( indices[0] !== '' ) {
+                        //     // console.log(norm_coords)
+                        //     index.push(parseInt(indices[0]) - 1);//, parseFloat(indices[1]), parseFloat(indices[2])
+                        // } else {
+                        //     index.push(parseInt('0'));//, parseFloat(indices[1]), parseFloat(indices[2])
+                        // }
+                        //
+                        // if ( indices[1] !== '' ) {
+                        //     tex_coords.push(parseInt(indices[1]));
+                        // } else {
+                        //     tex_coords.push(parseInt('0'));
+                        // }
+                        //
+                        // if ( indices[2] !== '') {
+                        //     norm_coords.push(parseInt(indices[2]));
+                        // } else {
+                        //     norm_coords.push(parseInt('0'));
+                        // }
+
+
+                    }
+                });
+            } else if( parts[0] === 'vt' ) {
+                // console.log(parts[2], parts[4])
+                uv_verts.push(parseFloat(parts[2]), parseFloat(parts[4]));
+            } else if( parts[0] === 'vn' ) {
+                vertex_normals.push(parseFloat(parts[2]),parseFloat(parts[4]),parseFloat(parts[6]));
             }
         }
+        let color_index = 0;
+        let uv_index = 0;
+        let v_normal_index = 0;
+
+        let finalverts = [];
+
+        for (let i = 0; i <= verts.length - 2; i+=3) {
+            finalverts.push(verts[i],verts[i+1],verts[i+2]);
+            finalverts.push(color[color_index],color[color_index+1],color[color_index+2],color[color_index+3]);
+            finalverts.push(uv_verts[uv_index], uv_verts[uv_index+1]);
+            finalverts.push(vertex_normals[v_normal_index],vertex_normals[v_normal_index+1],vertex_normals[v_normal_index+2]);
+            color_index+=4;
+            uv_index+=2;
+            v_normal_index+=3;
+        }
+
         //console.log( verts.slice(540, 600) )
         // console.log( indis.slice(540, 600) )
-        // console.log(index.length)
-        return new NormalMesh( gl, program, verts, index, material, false );
+        console.log(finalverts);
+        console.log(index);
+        // console.log(norm_coords);
+        // console.log(tex_coords);
+        //console.log(finalverts)
+
+        return new NormalMesh( gl, program, finalverts, index, material, false, tex_coords, norm_coords);
     }
 
     /**
@@ -374,88 +546,107 @@ class NormalMesh {
         request.send();                   // execute request
     }
 
-    static diamond_square( scale, roughness, min_height, max_height, center_row, center_col ) {
-        console.log(center_row,center_col)
-        //check for map length if too big it will take too much memory
-        //only allowing for arr.length = 2^14 + 1 max size
-        scale = (scale > 14) ? 14 : scale;
+    /**
+     *
+     * @param scale
+     * @param roughness
+     * @param min_height
+     * @param max_height
+     * @param center_row
+     * @param center_col
+     * @returns {*[]}
+     */
 
-        //offset for midpoint
-        let random_offset = Math.random() * (max_height - min_height) + min_height;
-        let length = Math.pow(2, scale) + 1;
-
-        //generating empty map of size length
-        let map = [];
-        for ( let i =0; i < length; i++ ) {
-            map[i] = new Array(length).fill(0);
-        }
-
-        //initializing corners of the map to random value between passed max and min heights
-        map[0][0] = Math.random() * (max_height - min_height) + min_height;
-        map[length - 1][0] = Math.random() * (max_height - min_height) + min_height;
-        map[0][length - 1] = Math.random() * (max_height - min_height) + min_height;
-        map[length - 1][length - 1] = Math.random() * (max_height - min_height) + min_height;
-        console.log(map)
-
-        let partition_size = length - 1;
-
-        //
-        // //setting the midpoint to the 4 corners and offset (rip) added
-        // map[(length - 1)/2][(length - 1)/2] = ( map[0][0] + map[length - 1][0] + map[0][length - 1] +
-        //                                         map[length - 1][length - 1] ) / 4 + random_offset;
-        //
-        //
-
-        while (partition_size > 1) {
-            let middle = partition_size / 2;
-
-            //diamond step
-            for ( let row = 0; row < length - 1; row += middle ) {
-                for ( let col = 0; col < length - 1; col += partition_size ) {
-                    diamond(row + middle, col, partition_size, random_offset * roughness);
-                }
-            }
-
-            //square step
-            for (let row = middle; row < length - 1; row += partition_size) {
-                for (let col = middle; col < length - 1; col += partition_size) {
-                    square(row, col, partition_size, random_offset * roughness)
-                }
-            }
-            // /square(partition_size, length, middle, random_offset);
-            roughness = roughness/2
-            partition_size = parseInt(partition_size/2);
-        }
-
-        return map;
-
-        function square(row, col, part_size, random_offset, map) {
-            let average_corners =
-                map[row - part_size/2][col - part_size/2] +
-                map[row + part_size/2][col - part_size/2] +
-                map[row - part_size/2][col + part_size/2] +
-                map[row + part_size/2][col + part_size/2];
-            // console.log(average_corners);
-
-            map[row][col] = (average_corners/4) * random_offset;
-        }
-
-        function diamond(row, col, part_size, random_offset) {
-
-            console.log(map[Math.abs(row - part_size/2)][col])
-            let average_corners =
-                map[row - part_size/2][col] +
-                map[row + part_size/2][col] +
-                map[row][col - part_size/2] +
-                map[row][col + part_size/2];
-            // console.log(average_corners);
-
-            map[row][col] = (average_corners/4) * random_offset;
-        }
+    // static diamond_square(map, roughness, min_height, max_height, center_row, center_col, start_row, start_col, ending_row, ending_col) {
+    //
+    //     if (center_col < 1) {
+    //         return;
+    //     }
+    //     console.log(center_row,center_col, map);
+    //
+    //     let random_offset = Math.random() * (max_height - min_height) - min_height;
+    //     //diamond step
+    //     let top = start_col;
+    //     let left = start_col;
+    //     let right = ending_col;
+    //     let bot = ending_col;
+    //     console.log(top,left,right,bot)
+    //     //diamond step
+    //     map[center_row][center_col] =
+    //                    (map[top][left] +
+    //                     map[top][right] +
+    //                     map[bot][left] +
+    //                     map[bot][right])/4 + random_offset;
+    //
+    //     console.log(map);
+    //
+    //     //square step
+    //     let radius = center_row - start_row;
+    //
+    //     // north_node
+    //     // if(start_row < 2) {
+    //     //     map[start_row][center_col] =
+    //     //         map[start_row][center_col] + //north of north node
+    //     //         map[start_row][center_col] + //east of north node
+    //     //         map[][] + //west of north node
+    //     //         map[center_row][center_row]; //south of north node
+    //     // }
+    //     // south node bot right/2
+    //     // map[ending_row][radius]
+    //     // // east node bot/2 right
+    //     // map[radius][ending_col]
+    //     // // west node bot/2 top
+    //     // map[radius][start_row]
+    //
+    //
+    //     this.diamond_square();
+    //     this.diamond_square();
+    //     this.diamond_square();
+    //     this.diamond_square();
+    //
+    //     return map;
+    //
+    // }
 
 
-
-    }
 
 }
+
+/*
+       //loop until we fill the array
+        while (partition_size > 1) {
+            let random_offset = Math.random() * (max_height - min_height) + min_height * roughness;
+            let half_steps = partition_size/2;
+            //diamond step
+            for (let row = 0; row < partition_size; row+=partition_size) {
+                for (let col = 0; col < partition_size; col+=partition_size) {
+                    let avg = map[row][col] +
+                        map[row][partition_size] +
+                        map[partition_size][row] +
+                        map[partition_size][partition_size];
+                    map[center_row][center_col] = (avg/4) * random_offset;
+                }
+            }
+
+            // //square step
+            for (let row = 0; row < partition_size; row+=half_steps) {
+                for (let col = (row + half_steps) % partition_size; col < partition_size; col+=partition_size) {
+                    console.log(row, col);
+                    if (row > 0 && row < partition_size) {
+                        // console.log(row - half_steps)
+                        // map[row][col] =
+                        //     map[row][] + //top left
+                        //     map[][] + //top right
+                        //     map[][] + //bot left
+                        //     map[][]; //bot right
+                    }
+                    if (col > 0 && col < partition_size) {
+
+                    }
+                }
+            }
+            partition_size /= 2;
+            roughness /= 2;
+        }
+ */
 
